@@ -66,7 +66,12 @@ class MyModel(ptl.LightningModule):
 
     def configure_optimizers(self):
         optimizer = optim.Adam(self.parameters(), lr=self.learning_rate)
-        return optimizer
+        # scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer=optimizer, patience=50)
+        return {
+            "optimizer": optimizer,
+            # "scheduler": scheduler,
+            # "lr_scheduler_config": {"monitor": "val_loss"},
+        }
 
 
 dataset = MyDataset()
@@ -76,7 +81,10 @@ train_loader = DataLoader(train_set, batch_size=32, shuffle=True)
 val_loader = DataLoader(val_set, shuffle=False, batch_size=100)
 
 model = MyModel()
-trainer = ptl.Trainer(max_epochs=250, auto_lr_find=True, logger=logger)
-# lrfinder = trainer.tune(model, train_loader)
+trainer = ptl.Trainer(max_epochs=500, auto_lr_find=True, logger=logger)
 
+# lrfinder = trainer.tune(model, train_loader)
+# lrfinder["lr_find"].plot(suggest=True)
+
+#%%
 trainer.fit(model=model, train_dataloaders=train_loader, val_dataloaders=val_loader)
