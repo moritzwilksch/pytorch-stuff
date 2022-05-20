@@ -3,5 +3,6 @@ format:
 	isort .
 
 clean:
-	rm -rf lightning_logs
-	rm -rf tb_logs
+	rm -r lightning_logs || true
+	rm -r tb_logs || true
+	rm -r logs/my_model || true

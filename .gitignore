@@ -1,4 +1,8 @@
+data
+logs/*
+
 lightning_logs/*
+
 tb_logs/*
 src/tb_logs/*
 # Byte-compiled / optimized / DLL files

@@ -58,7 +58,7 @@ class MyModel(ptl.LightningModule):
         self.log("train_loss", loss)
         return loss
 
-    def validation_step(self, batch, batch_idx):
+    def validation_step(self, batch):
         x, y = batch
         yhat = self.ff(x.float())
         loss = nn.MSELoss()(yhat.flatten(), y.float().flatten())
