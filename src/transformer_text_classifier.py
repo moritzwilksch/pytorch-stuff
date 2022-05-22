@@ -15,7 +15,9 @@ from torchtext.vocab import build_vocab_from_iterator
 
 logger = TensorBoardLogger("logs", name="my_model")
 tokenizer = get_tokenizer("basic_english")
-
+vocab: torchtext.vocab.Vocab = joblib.load("data/vocab.joblib")
+print("Loaded vocab.")
+print(f"vocab size = {len(vocab)}")
 
 class TweetDataset(utils.data.Dataset):
     def __init__(self) -> None:
@@ -23,7 +25,7 @@ class TweetDataset(utils.data.Dataset):
         self.y = []
 
         df = pd.read_csv("data/SRS_sentiment_labeled.csv")
-        self.x = df["tweet"].to_numpy()
+        self.x = df["tweet"].str.replace(r"\d", "9").to_numpy()
         self.y = df["sentiment"].to_numpy() + 1
         self.xtrain, self.xval, self.ytrain, self.yval = train_test_split(
             self.x, self.y, random_state=42
@@ -44,13 +46,26 @@ def yield_tokens(data_iter):
 def collate_batch(batch):
     x_processed = []
     y_processed = []
+    seq_lens = []
+    masks = []
+
     for x, y in batch:
-        x_processed.append(torch.Tensor(vocab(tokenizer(x))).long())
+        x_vectorized = torch.Tensor(vocab(tokenizer(x))).long()
+        x_processed.append(x_vectorized)
         y_processed.append(y)
+        seq_lens.append(x_vectorized.size(-1))
+
+    # masking makes training 2% FASTER and improves accuracy!
+    max_seq_len = max(seq_lens)
+    for l in seq_lens:
+        mask = torch.zeros(max_seq_len, max_seq_len)
+        mask[:l, :l] = 1
+        masks.append(mask)
+
     return (
         nn.utils.rnn.pad_sequence(x_processed),
         torch.Tensor(y_processed).long().flatten(),
-        # TODO: create attention mask re: padding
+        torch.stack(masks),
     )
 
 
@@ -58,32 +73,34 @@ def collate_batch(batch):
 class TweetModel(pl.LightningModule):
     def __init__(self, emb_dim: int = 16, lr: float = 2e-3) -> None:
         super().__init__()
+        self.save_hyperparameters()
         self.lr = lr
         self.accuracy = torchmetrics.Accuracy()
         self.val_accuracy = torchmetrics.Accuracy()
-        self.emb_dim = emb_dim
-        self.add_pos_encoding = Summer(PositionalEncoding1D(emb_dim))
-        self.embedding = nn.Embedding(len(vocab), emb_dim)
+        # self.emb_dim = emb_dim
+        self.add_pos_encoding = Summer(PositionalEncoding1D(self.hparams.emb_dim))
+        self.embedding = nn.Embedding(len(vocab), self.hparams.emb_dim)
         self.transformer = nn.TransformerEncoderLayer(
-            d_model=emb_dim, nhead=1, dim_feedforward=128
+            d_model=self.hparams.emb_dim, nhead=1, dim_feedforward=128
         )
 
         self.flatten = nn.Flatten()
-        self.dense = nn.Linear(in_features=self.emb_dim, out_features=3)
+        self.dense = nn.Linear(in_features=self.hparams.emb_dim, out_features=3)
 
-    def forward(self, x):
+    def forward(self, x, mask):
         x = self.embedding(x)
         x = self.add_pos_encoding(x)
-        x = self.transformer(x)
+        x = self.transformer(x, src_mask=mask)
         x = F.dropout(x, 0.5)
         x = torch.mean(x, 0)
         # x = F.dropout(x, 0.5)
         x = self.dense(x)
+        x = F.softmax(x, dim=1)
         return x
 
     def training_step(self, batch, batch_idx):
-        x, y = batch
-        y_hat = self.forward(x)
+        x, y, mask = batch
+        y_hat = self.forward(x, mask)
         loss = nn.CrossEntropyLoss()(y_hat, y)
         self.log("train_loss", loss)
         self.accuracy(y_hat, y)
@@ -91,20 +108,14 @@ class TweetModel(pl.LightningModule):
         return loss
 
     def validation_step(self, batch, batch_idx):
-        x, y = batch
-        y_hat = self.forward(x)
+        x, y, mask = batch
+        y_hat = self.forward(x, mask)
         loss = nn.CrossEntropyLoss()(y_hat, y)
         self.log("val_loss", loss, prog_bar=True)
         self.val_accuracy(y_hat, y)
         self.log("val_acc", self.val_accuracy, prog_bar=True)
 
         return loss
-
-    # def training_epoch_end(self, outputs):
-    #     self.log("train_acc", self.accuracy)
-
-    # def val_epoch_end(self, outputs):
-    #     self.log("val_acc", self.val_accuracy)
 
     def configure_optimizers(self):
         return torch.optim.Adam(self.parameters(), lr=self.lr)
@@ -153,14 +164,11 @@ class TweetDataModule(pl.LightningDataModule):
         )
 
 
-vocab: torchtext.vocab.Vocab = joblib.load("data/vocab.joblib")
-print("Loaded vocab.")
-print(f"vocab size = {len(vocab)}")
+if __name__ == "__main__":
+    model = TweetModel(emb_dim=16)
+    checkpointer = pl.callbacks.ModelCheckpoint("checkpoints/", mode="max", monitor="val_acc")
+    trainer = pl.Trainer(
+        logger=logger, max_epochs=50, log_every_n_steps=40, auto_lr_find=False, callbacks=[checkpointer]
+    )
 
-
-model = TweetModel(emb_dim=8)
-trainer = pl.Trainer(
-    logger=logger, max_epochs=50, log_every_n_steps=40, auto_lr_find=False
-)
-
-trainer.fit(model, TweetDataModule(batch_size=32))
+    trainer.fit(model, TweetDataModule(batch_size=32, rebuild_vocab=False))
