@@ -19,6 +19,7 @@ vocab: torchtext.vocab.Vocab = joblib.load("data/vocab.joblib")
 print("Loaded vocab.")
 print(f"vocab size = {len(vocab)}")
 
+
 class TweetDataset(utils.data.Dataset):
     def __init__(self) -> None:
         self.x = []
@@ -166,9 +167,15 @@ class TweetDataModule(pl.LightningDataModule):
 
 if __name__ == "__main__":
     model = TweetModel(emb_dim=16)
-    checkpointer = pl.callbacks.ModelCheckpoint("checkpoints/", mode="max", monitor="val_acc")
+    checkpointer = pl.callbacks.ModelCheckpoint(
+        "checkpoints/", mode="max", monitor="val_acc"
+    )
     trainer = pl.Trainer(
-        logger=logger, max_epochs=50, log_every_n_steps=40, auto_lr_find=False, callbacks=[checkpointer]
+        logger=logger,
+        max_epochs=50,
+        log_every_n_steps=40,
+        auto_lr_find=False,
+        callbacks=[checkpointer],
     )
 
     trainer.fit(model, TweetDataModule(batch_size=32, rebuild_vocab=False))
